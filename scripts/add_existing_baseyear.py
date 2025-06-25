@@ -11,9 +11,9 @@ import re
 from types import SimpleNamespace
 
 import country_converter as coco
+import geopandas as gpd
 import numpy as np
 import pandas as pd
-import geopandas as gpd
 import powerplantmatching as pm
 import pypsa
 import xarray as xr
@@ -708,11 +708,12 @@ def add_heating_capacities_installed_before_baseyear(
 
 
 def prepare_plant_data():
-
     # add existing industry
     regions = gpd.read_file(snakemake.input.regions_onshore).set_index("name")
-    
-    isi_data = pd.read_excel(snakemake.input.isi_database, sheet_name="Database", index_col=1)
+
+    isi_data = pd.read_excel(
+        snakemake.input.isi_database, sheet_name="Database", index_col=1
+    )
     # assign bus region to each plant
     geometry = gpd.points_from_xy(isi_data["Longitude"], isi_data["Latitude"])
     plant_data = gpd.GeoDataFrame(isi_data, geometry=geometry, crs="EPSG:4326")
@@ -724,27 +725,36 @@ def prepare_plant_data():
     plant_data["Country"] = plant_data["Country"].replace("UK", "GB")
     # assign industry grouping year
     grouping_years = snakemake.params.existing_capacities["grouping_years_industry"]
-    plant_data.loc[:, 'Year of last modernisation'] = plant_data['Year of last modernisation'].replace("x", np.nan)
-    plant_data['grouping_year'] = 0
-    valid_mask = plant_data['Year of last modernisation'].notna()
-    valid_years = plant_data.loc[valid_mask, 'Year of last modernisation']
-    indices = np.searchsorted(grouping_years, valid_years, side='right')
-    plant_data.loc[valid_years.index, 'grouping_year'] = np.array(grouping_years)[indices]
+    plant_data.loc[:, "Year of last modernisation"] = plant_data[
+        "Year of last modernisation"
+    ].replace("x", np.nan)
+    plant_data["grouping_year"] = 0
+    valid_mask = plant_data["Year of last modernisation"].notna()
+    valid_years = plant_data.loc[valid_mask, "Year of last modernisation"]
+    indices = np.searchsorted(grouping_years, valid_years, side="right")
+    plant_data.loc[valid_years.index, "grouping_year"] = np.array(grouping_years)[
+        indices
+    ]
 
     return plant_data, regions
 
 
 def add_existing_ammonia_plants(n):
-
     logger.info("Adding existing ammonia plants.")
 
     plant_data, regions = prepare_plant_data()
 
-    ammonia_plants = plant_data[plant_data.Product=="Ammonia"]
-    
-    ammonia_plants = ammonia_plants.groupby(['bus', 'Country', 'grouping_year', 'Product'], as_index=False)['Production in tons (calibrated)'].sum()
-    
-    ammonia_plants.index = ammonia_plants['bus'] + " Haber-Bosch-" + ammonia_plants['grouping_year'].astype(str)
+    ammonia_plants = plant_data[plant_data.Product == "Ammonia"]
+
+    ammonia_plants = ammonia_plants.groupby(
+        ["bus", "Country", "grouping_year", "Product"], as_index=False
+    )["Production in tons (calibrated)"].sum()
+
+    ammonia_plants.index = (
+        ammonia_plants["bus"]
+        + " Haber-Bosch-"
+        + ammonia_plants["grouping_year"].astype(str)
+    )
 
     # add dataset
     df = pd.read_csv(snakemake.input.ammonia, index_col=0)
@@ -763,9 +773,17 @@ def add_existing_ammonia_plants(n):
         "Link",
         ammonia_plants.index,
         bus0=ammonia_plants.bus,
-        bus1=[bus + " NH3" for bus in ammonia_plants.bus] if snakemake.params.sector["ammonia"] else "EU NH3",
-        bus2=[bus + " gas" for bus in ammonia_plants.bus] if snakemake.params.sector["gas_network"] else "EU gas",
-        p_nom=ammonia_plants["Production in tons (calibrated)"].mul(snakemake.params.MWh_NH3_per_tNH3).div(costs.at["Haber-Bosch", "electricity-input"]).div(8760).values,
+        bus1=[bus + " NH3" for bus in ammonia_plants.bus]
+        if snakemake.params.sector["ammonia"]
+        else "EU NH3",
+        bus2=[bus + " gas" for bus in ammonia_plants.bus]
+        if snakemake.params.sector["gas_network"]
+        else "EU gas",
+        p_nom=ammonia_plants["Production in tons (calibrated)"]
+        .mul(snakemake.params.MWh_NH3_per_tNH3)
+        .div(costs.at["Haber-Bosch", "electricity-input"])
+        .div(8760)
+        .values,
         p_nom_extendable=False,
         carrier="Haber-Bosch",
         efficiency=1 / costs.at["Haber-Bosch", "electricity-input"],
@@ -778,7 +796,6 @@ def add_existing_ammonia_plants(n):
         build_year=ammonia_plants["grouping_year"],
         lifetime=costs.at["Haber-Bosch", "lifetime"],
     )
-
 
 
 if __name__ == "__main__":
