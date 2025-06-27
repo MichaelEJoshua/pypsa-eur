@@ -724,7 +724,7 @@ def prepare_plant_data(
     """
     # add existing industry
     regions = gpd.read_file(regions_fn).set_index("name")
-    
+
     isi_data = pd.read_excel(isi_database, sheet_name="Database", index_col=1)
     # assign bus region to each plant
     geometry = gpd.points_from_xy(isi_data["Longitude"], isi_data["Latitude"])
@@ -752,7 +752,7 @@ def prepare_plant_data(
 
 
 def add_existing_ammonia_plants(
-        n: pypsa.Network, 
+    n: pypsa.Network,
 ) -> None:
     """
     Adds existing Haber-Bosch plants.
@@ -766,11 +766,17 @@ def add_existing_ammonia_plants(
         snakemake.input.isi_database,
     )
 
-    fh_ammonia = plant_data[plant_data.Product=="Ammonia"]
-    
-    fh_ammonia = fh_ammonia.groupby(['bus', 'Country', 'grouping_year', 'Product'], as_index=False)['Production in tons (calibrated)'].sum()
-    
-    fh_ammonia.index = fh_ammonia['bus'] + " Haber-Bosch-SMR-" + fh_ammonia['grouping_year'].astype(str)
+    fh_ammonia = plant_data[plant_data.Product == "Ammonia"]
+
+    fh_ammonia = fh_ammonia.groupby(
+        ["bus", "Country", "grouping_year", "Product"], as_index=False
+    )["Production in tons (calibrated)"].sum()
+
+    fh_ammonia.index = (
+        fh_ammonia["bus"]
+        + " Haber-Bosch-SMR-"
+        + fh_ammonia["grouping_year"].astype(str)
+    )
     # add dataset for Non EU27 countries
     df = pd.read_csv(snakemake.input.ammonia, index_col=0)
 
@@ -780,9 +786,12 @@ def add_existing_ammonia_plants(
     gdf = gpd.sjoin(gdf, regions, how="inner", predicate="within")
 
     gdf.rename(columns={"name": "bus"}, inplace=True)
-    gdf["Country"] = gdf.bus.str[:2]    
+    gdf["Country"] = gdf.bus.str[:2]
     # filter for countries that are missing
-    gdf = gdf[(~gdf.Country.isin(fh_ammonia.Country.unique())) & (gdf.Country.isin(snakemake.params.countries))]
+    gdf = gdf[
+        (~gdf.Country.isin(fh_ammonia.Country.unique()))
+        & (gdf.Country.isin(snakemake.params.countries))
+    ]
     # following approach from build_industrial_distribution_key.py
     for country in gdf.Country:
         facilities = gdf.query("Country == @country")
@@ -794,26 +803,51 @@ def add_existing_ammonia_plants(
     gdf.drop(gdf[gdf["Ammonia [kt/a]"].isna()].index, inplace=True)
 
     # get average plant age:
-    avg_age = plant_data[plant_data.Product=="Ammonia"]["Year of last modernisation"].mean()
-    gdf["grouping_year"] = min((y for y in snakemake.params.existing_capacities["grouping_years_industry"] if y > avg_age))
+    avg_age = plant_data[plant_data.Product == "Ammonia"][
+        "Year of last modernisation"
+    ].mean()
+    gdf["grouping_year"] = min(
+        y
+        for y in snakemake.params.existing_capacities["grouping_years_industry"]
+        if y > avg_age
+    )
     # match database
-    gdf.index = gdf["bus"] + " Haber-Bosch-SMR-" + gdf["grouping_year"].values.astype(str)
-    gdf.rename(columns={"Ammonia [kt/a]": "Production in tons (calibrated)"}, inplace=True)
+    gdf.index = (
+        gdf["bus"] + " Haber-Bosch-SMR-" + gdf["grouping_year"].values.astype(str)
+    )
+    gdf.rename(
+        columns={"Ammonia [kt/a]": "Production in tons (calibrated)"}, inplace=True
+    )
     gdf["Production in tons (calibrated)"] *= 1e3
 
-    ammonia_plants = pd.concat([fh_ammonia, gdf[["bus", "Country", "grouping_year", "Production in tons (calibrated)"]]])
+    ammonia_plants = pd.concat(
+        [
+            fh_ammonia,
+            gdf[["bus", "Country", "grouping_year", "Production in tons (calibrated)"]],
+        ]
+    )
 
     # https://dechema.de/dechema_media/Downloads/Positionspapiere/Technology_study_Low_carbon_energy_and_feedstock_for_the_European_chemical_industry.pdf
     # page 56: 1.83 t_CO2/t_NH3
-    ch4_per_nh3 = 1.83 / costs.at["gas", "CO2 intensity"] / snakemake.params["MWh_NH3_per_tNH3"]
+    ch4_per_nh3 = (
+        1.83 / costs.at["gas", "CO2 intensity"] / snakemake.params["MWh_NH3_per_tNH3"]
+    )
     n.add(
         "Link",
         ammonia_plants.index,
-        bus0=[bus + " gas" for bus in ammonia_plants.bus] if snakemake.params.sector["gas_network"] else "EU gas",
-        bus1=[bus + " NH3" for bus in ammonia_plants.bus] if snakemake.params.sector["ammonia"] else "EU NH3",
+        bus0=[bus + " gas" for bus in ammonia_plants.bus]
+        if snakemake.params.sector["gas_network"]
+        else "EU gas",
+        bus1=[bus + " NH3" for bus in ammonia_plants.bus]
+        if snakemake.params.sector["ammonia"]
+        else "EU NH3",
         bus2=ammonia_plants.bus,
         bus3="co2 atmosphere",
-        p_nom=ammonia_plants["Production in tons (calibrated)"].mul(snakemake.params.MWh_NH3_per_tNH3).div(ch4_per_nh3).div(8760).values,
+        p_nom=ammonia_plants["Production in tons (calibrated)"]
+        .mul(snakemake.params.MWh_NH3_per_tNH3)
+        .div(ch4_per_nh3)
+        .div(8760)
+        .values,
         p_nom_extendable=False,
         carrier="Haber-Bosch",
         efficiency=1 / ch4_per_nh3,
